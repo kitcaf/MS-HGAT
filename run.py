@@ -44,6 +44,7 @@ parser.add_argument('-dropout', type=float, default=0.3)  # dropout比率
 parser.add_argument('-log', default=None)  # 日志路径
 parser.add_argument('-save_path', default= "./checkpoint/DiffusionPrediction.pt")  # 模型保存路径
 parser.add_argument('-save_mode', type=str, choices=['all', 'best'], default='best')  # 保存模式
+# action 参数 表示命令行中出现no_cuda参数时，-no_cuda 参数的值为True
 parser.add_argument('-no_cuda', action='store_true')  # 是否不使用CUDA
 parser.add_argument('-pos_emb', type=bool, default=True)  # 是否使用位置嵌入
 
@@ -136,7 +137,7 @@ def train_model(MSHGAT, data_path):
     valid_data = DataLoader(valid, batch_size=opt.batch_size, load_dict=True, cuda=False)
     test_data = DataLoader(test, batch_size=opt.batch_size, load_dict=True, cuda=False)
     
-    # 构建关系图和超图
+    # 构建联系关系图和传播超图
     relation_graph = ConRelationGraph(data_path)
     hypergraph_list = ConHyperGraphList(total_cascades, timestamps, user_size)
 

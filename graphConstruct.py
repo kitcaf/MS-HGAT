@@ -8,7 +8,7 @@ from dataLoader import Options
 import scipy.sparse as sp
 import torch.nn.functional as F
 
-'''友谊网络构建'''       
+'''Friendship网络构建'''       
 def ConRelationGraph(data):
         """
         构建用户关系图（友谊网络）
@@ -23,6 +23,7 @@ def ConRelationGraph(data):
         with open(options.u2idx_dict, 'rb') as handle:
             _u2idx = pickle.load(handle)
         
+        #TODO 
         edges_list = []  # 边列表
         if os.path.exists(options.net_data):
             with open(options.net_data, 'r') as handle:
@@ -31,20 +32,27 @@ def ConRelationGraph(data):
 
                 # 将用户名转换为索引，并过滤不在索引中的用户
                 relation_list = [(_u2idx[edge[0]], _u2idx[edge[1]]) for edge in relation_list if edge[0] in _u2idx and edge[1] in _u2idx]
-                # 添加反向边，构建无向图
+
+                # 添加反向边，构建无向图 relation_list = [[1, 2], [3, 4], [5, 6] ...]
                 relation_list_reverse = [edge[::-1] for edge in relation_list]
+
                 edges_list += relation_list_reverse
         else:
             return []  # 如果边文件不存在，返回空列表
         # 转换为PyTorch张量格式
         edges_list_tensor = torch.LongTensor(edges_list).t()
-        edges_weight = torch.ones(edges_list_tensor.size(1)).float()    
+        edges_weight = torch.ones(edges_list_tensor.size(1)).float() # 权重这里其实是可以自动计算的
+        """
+
+        
+        """
         data = Data(edge_index=edges_list_tensor, edge_attr=edges_weight)
         
         return data
 
 '''扩散超图构建'''
 def ConHyperGraphList(cascades, timestamps, user_size, step_split=Constants.step_split):
+    #TODO
     '''
     将超图分割为子图，返回图列表
     参数:
@@ -56,6 +64,7 @@ def ConHyperGraphList(cascades, timestamps, user_size, step_split=Constants.step
         graphs: 包含子图和根节点列表的列表
     '''
 
+    print(f"扩散超图构建的级联总数{len(cascades)}")
     times, root_list = ConHyperDiffsuionGraph(cascades, timestamps, user_size)
     zero_vec = torch.zeros_like(times)  # 零向量，与times形状相同
     one_vec = torch.ones_like(times)    # 一向量，与times形状相同
@@ -107,9 +116,11 @@ def ConHyperDiffsuionGraph(cascades, timestamps, user_size):
         
     for i in range(e_size-1):
         root_list.append(cascades[i][0])  # 添加每个级联的根节点
+        #TODO 后面改成3步预测时，这里就是-3
         rows += cascades[i][:-1]          # 添加行索引（用户）
         cols +=[i+1]*(len(cascades[i])-1) # 添加列索引（级联ID）
         #vals +=[1.0]*(len(cascades[i])-1)
+        #TODO 后面改成3步预测时，同理也是-3
         vals_time += timestamps[i][:-1]    # 添加时间值
         
     root_list = torch.tensor(root_list)   # 转换为张量

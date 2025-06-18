@@ -76,10 +76,8 @@ def Split_data(data_name, train_rate =0.8, valid_rate = 0.1, random_seed = 300, 
             chunks = line.strip().split(',')
             for chunk in chunks:
                 try:
-                    # 处理Twitter和Douban数据集格式
                     if len(chunk.split())==2:
                         user, timestamp = chunk.split()
-                    # 处理Android和Christianity数据集格式
                     elif len(chunk.split())==3:
                         root, user, timestamp = chunk.split()                                           
                         if root in u2idx:          
@@ -87,9 +85,11 @@ def Split_data(data_name, train_rate =0.8, valid_rate = 0.1, random_seed = 300, 
                             timestamplist.append(float(timestamp))
                 except:
                     print(chunk)
+
+                # 将实际的用户编号转换为从1开始的id, user_to_id
                 if user in u2idx:
                     userlist.append(u2idx[user])
-                    timestamplist.append(float(timestamp))
+                    timestamplist.append(float(timestamp)) #转换为浮点数
 
             # 只保留长度大于1且不超过500的级联
             if len(userlist) > 1 and len(userlist)<=500:
@@ -97,14 +97,27 @@ def Split_data(data_name, train_rate =0.8, valid_rate = 0.1, random_seed = 300, 
                     # 添加结束符
                     userlist.append(Constants.EOS)
                     timestamplist.append(Constants.EOS)
-                t_cascades.append(userlist)
-                timestamps.append(timestamplist)
+                t_cascades.append(userlist) #添加到级联序列
+                timestamps.append(timestamplist) #添加到时间戳序列
                 
         
-        '''按时间戳排序'''        
+        ''' 按时间戳排序
+        注意这里是二维列表， 根据每个子列表的​​第一个时间戳对所有子列表排序
+        保证级联的起点发送顺序是一致的
+
+        （1）先构建一个包含时间戳和索引的列表 [30, 10, 20] → [(0, 30), (1, 10), (2, 20)] ，
+        t_cascades = [[], [], [], [] ...]
+        timestamps = [[], [], [], ...]
+        然后按照x[1]排序，得到 [(1, 10), (2, 20), (0, 30)]
+        然后按照这个对timestamps进行排序
+        接着保证t_cascades的顺序与timestamps的顺序（用户和用户发送的时间是一一对应的）一致
+        也对t_cascades按照order通过排序
+        '''
+
         order = [i[0] for i in sorted(enumerate(timestamps), key=lambda x:x[1])]
         timestamps = sorted(timestamps)
         t_cascades[:] = [t_cascades[i] for i in order]
+        # 简单的索引列表
         cas_idx = [i for i in range(len(t_cascades))]
         
         '''数据分割'''
@@ -209,7 +222,7 @@ class DataLoader(object):
         """
         初始化数据加载器
         参数:
-            cas: 级联数据，包含序列、时间戳和索引
+            cas: 所有级联数据，包含所有级联序列、时间戳和索引（都是二维，里面的每一个元素表示一个级联）
             batch_size: 批次大小，默认64
             load_dict: 是否加载字典，默认True
             cuda: 是否使用CUDA，默认True
@@ -219,11 +232,16 @@ class DataLoader(object):
         self._batch_size = batch_size
         self.cas = cas[0]  # 级联序列
         self.time = cas[1]  # 时间戳
-        self.idx = cas[2]  # 索引
+        self.idx = cas[2]  # 索引列表
         self.test = test  # 测试模式标志
         self.with_EOS = with_EOS  # 是否包含结束符        
         self.cuda = cuda  # 是否使用CUDA
-        
+
+        rows = len(self.cas)
+        cols = len(self.cas[0]) if rows > 0 else 0
+
+        print(f"self.cas.shape(): {rows} * {cols}")
+
         self._n_batch = int(np.ceil(len(self.cas) / self._batch_size))  # 批次数量
         self._iter_count = 0  # 迭代计数器
 
@@ -241,11 +259,13 @@ class DataLoader(object):
         """返回批次数量"""
         return self._n_batch
 
+    # 核心迭代器方法，返回下一个批次的数据
     def next(self):
         ''' 获取下一批数据 '''
 
+        # 将序列填充到最大长度
         def pad_to_longest(insts):
-            ''' 将序列填充到最大长度 '''
+            ''' 将某个批次的级联序列集合填充到最大长度/截断到最大长度返回 '''
 
             max_len = 200  # 最大序列长度
             
@@ -255,6 +275,10 @@ class DataLoader(object):
                for inst in insts])
                 
             # 转换为PyTorch张量
+            # 将数组转换为转换为 PyTorch 张量并包装在 Variable 中
+            """
+                PyTorch 张量多维数组（可能底层是进入到显存的一片连续的空间）
+            """
             inst_data_tensor = Variable(
                 torch.LongTensor(inst_data), volatile=self.test)
 
