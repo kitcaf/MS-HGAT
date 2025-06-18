@@ -66,15 +66,15 @@ def ConHyperGraphList(cascades, timestamps, user_size, step_split=Constants.step
 
     print(f"扩散超图构建的级联总数{len(cascades)}")
     times, root_list = ConHyperDiffsuionGraph(cascades, timestamps, user_size)
-    zero_vec = torch.zeros_like(times)  # 零向量，与times形状相同
-    one_vec = torch.ones_like(times)    # 一向量，与times形状相同
+    zero_vec = torch.zeros_like(times)  # 零向量（其实就是里面的全部的值是0），与times形状相同
+    one_vec = torch.ones_like(times)    # 一向量（其实就是里面的全部的值是1），与times形状相同
     
     time_sorted = []  # 排序后的时间戳
     graph_list = {}   # 子图字典，键为时间戳，值为子图
     
     # 收集并排序所有时间戳
     for time in timestamps:
-        time_sorted += time[:-1]
+        time_sorted += time[:-1] #还是拿出每一个级联的开头节点的时间
     time_sorted = sorted(time_sorted)
     # 计算每个分割的长度
     split_length = len(time_sorted) // step_split
@@ -99,8 +99,8 @@ def ConHyperDiffsuionGraph(cascades, timestamps, user_size):
     '''
     返回超图的邻接矩阵和时间邻接矩阵
     参数:
-        cascades: 级联序列
-        timestamps: 时间戳
+        cascades: 级联序列 二维
+        timestamps: 时间戳 二维
         user_size: 用户数量
     返回:
         Times: 时间邻接矩阵
@@ -122,12 +122,44 @@ def ConHyperDiffsuionGraph(cascades, timestamps, user_size):
         #vals +=[1.0]*(len(cascades[i])-1)
         #TODO 后面改成3步预测时，同理也是-3
         vals_time += timestamps[i][:-1]    # 添加时间值
+    """
+        假设：数据流动
+        cascades = [
+            [5, 2, 7, 0],  # 级联1，0是EOS标记
+            [3, 8, 1, 4, 0]  # 级联2，0是EOS标记
+        ]
+
+        timestamps = [
+            [10.0, 15.0, 20.0, 0.0],  # 级联1的时间戳
+            [5.0, 8.0, 12.0, 18.0, 0.0]  # 级联2的时间戳
+        ]
+
+        user_size = 10  # 假设有10个用户
         
+        root_list = [0, 5, 3] 
+        rows = [5, 2, 3, 8, 1]  
+        cols = [1, 1, 2, 2, 2]  
+        vals_time = [10.0, 15.0, 5.0, 8.0, 12.0]  
+    
+    """
     root_list = torch.tensor(root_list)   # 转换为张量
     # 创建稀疏张量表示时间邻接矩阵
+    """ 形如
+              级联0  级联1  级联2
+        用户0 |  0.0   0.0   0.0 |
+        用户1 |  0.0   0.0  12.0 |
+        用户2 |  0.0  15.0   0.0 |
+        用户3 |  0.0   0.0   5.0 |
+        用户4 |  0.0   0.0   0.0 |
+        用户5 |  0.0  10.0   0.0 |
+        用户6 |  0.0   0.0   0.0 |
+        用户7 |  0.0   0.0   0.0 |
+        用户8 |  0.0   0.0   8.0 |
+        用户9 |  0.0   0.0   0.0 |
+    """
     Times = torch.sparse_coo_tensor(torch.Tensor([rows,cols]), torch.Tensor(vals_time), [n_size,e_size])
-        
-        
+    
+    # 转换为密集张量 --- 其实就是没有赋值的地方显示显示为0
     return Times.to_dense(), root_list
  
 
