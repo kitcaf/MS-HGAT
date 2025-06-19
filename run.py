@@ -59,12 +59,14 @@ def get_performance(crit, pred, gold):
     参数:
         crit: 损失函数
         pred: 预测值，维度为 [batch_size*seq_len, user_size]
-        gold: 真实值，维度为 [batch_size, seq_len]
+        gold: 真实值，维度为 [batch_size*seq_len]，已经是处理好的标签
     返回:
         loss: 损失值
         n_correct: 预测正确的样本数
     """
 
+    # 注意：gold已经是处理好的标签，不需要再次提取
+    # 计算损失
     loss = crit(pred, gold.contiguous().view(-1))  # 计算损失，将gold展平为一维向量 [batch_size*seq_len]
     pred = pred.max(1)[1]  # 获取预测的最大概率的索引，维度为 [batch_size*seq_len]
     gold = gold.contiguous().view(-1)  # 展平真实值，维度为 [batch_size*seq_len]
@@ -101,7 +103,9 @@ def train_epoch(model, training_data, graph, hypergraph_list, loss_func, optimiz
         tgt, tgt_timestamp, tgt_idx = (item.cuda() for item in batch)
         
         np.set_printoptions(threshold=np.inf)
-        gold = tgt[:, 1:]  # 真实值为目标序列的下一个元素，维度为 [batch_size, seq_len-1]
+        # 对于3步预测，标签应该是输入序列对应位置后3步的用户
+        # 例如，如果输入序列是[1, 2, 3, 4, 5, 6]，标签序列应该是[4, 5, 6, 7, 8, 9]
+        gold = tgt[:, Constants.STEP_SHIFT:]  # 真实值为目标序列的后3步元素，维度为 [batch_size, seq_len-3]
 
         n_words = gold.data.ne(Constants.PAD).sum().float()  # 非填充词的数量
         n_total_words += n_words
@@ -227,7 +231,9 @@ def test_epoch(model, validation_data, graph, hypergraph_list, k_list=[10, 50, 1
             # 准备数据
             tgt, tgt_timestamp, tgt_idx =  batch
             # 将真实标签展平为一维向量，维度为 [batch_size*seq_len]
-            y_gold = tgt[:, 1:].contiguous().view(-1).detach().cpu().numpy()  # 真实值，这里是将其展开为一个序列
+            # 对于3步预测，标签应该是输入序列对应位置后3步的用户
+            # 例如，如果输入序列是[1, 2, 3, 4, 5, 6]，标签序列应该是[4, 5, 6, 7, 8, 9]
+            y_gold = tgt[:, Constants.STEP_SHIFT:].contiguous().view(-1).detach().cpu().numpy()  # 真实值，这里是将其展开为一个序列
             print(f"真实标签，{y_gold.shape}")
             # 前向传播
             pred = model(tgt, tgt_timestamp, tgt_idx, graph, hypergraph_list )

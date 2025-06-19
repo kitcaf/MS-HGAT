@@ -117,11 +117,11 @@ def ConHyperDiffsuionGraph(cascades, timestamps, user_size):
     for i in range(e_size-1):
         root_list.append(cascades[i][0])  # 添加每个级联的根节点
         #TODO 后面改成3步预测时，这里就是-3
-        rows += cascades[i][:-1]          # 添加行索引（用户）
-        cols +=[i+1]*(len(cascades[i])-1) # 添加列索引（级联ID）
+        rows += cascades[i][:-1-Constants.STEP_SHIFT]          # 添加行索引（用户），减去3步和EOS标记
+        cols +=[i+1]*(len(cascades[i])-1-Constants.STEP_SHIFT) # 添加列索引（级联ID）
         #vals +=[1.0]*(len(cascades[i])-1)
         #TODO 后面改成3步预测时，同理也是-3
-        vals_time += timestamps[i][:-1]    # 添加时间值
+        vals_time += timestamps[i][:-1-Constants.STEP_SHIFT]    # 添加时间值
     """
         假设：数据流动
         cascades = [

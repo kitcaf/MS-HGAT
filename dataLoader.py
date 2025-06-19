@@ -92,7 +92,8 @@ def Split_data(data_name, train_rate =0.8, valid_rate = 0.1, random_seed = 300, 
                     timestamplist.append(float(timestamp)) #转换为浮点数
 
             # 只保留长度大于1且不超过500的级联
-            if len(userlist) > 1 and len(userlist)<=500:
+            # 修改为只保留长度大于Constants.STEP_SHIFT+1且不超过500的级联
+            if len(userlist) > Constants.STEP_SHIFT+1 and len(userlist)<=500:
                 if with_EOS:
                     # 添加结束符
                     userlist.append(Constants.EOS)

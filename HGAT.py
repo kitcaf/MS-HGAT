@@ -203,6 +203,7 @@ class MSHGAT(nn.Module):
         self.pos_dim = 8  # 位置嵌入维度
         self.dropout = nn.Dropout(dropout)
         self.initial_feature = opt.initialFeatureSize
+        self.step_shift = Constants.STEP_SHIFT  # 预测步长
 
         # 超图注意力网络
         self.hgnn = HGNN_ATT(self.initial_feature, self.hidden_size * 2, self.hidden_size, dropout=dropout)
@@ -216,6 +217,17 @@ class MSHGAT(nn.Module):
         # Transformer块
         self.decoder_attention1 = TransformerBlock(input_size=self.hidden_size + self.pos_dim, n_heads=8)
         self.decoder_attention2 = TransformerBlock(input_size=self.hidden_size + self.pos_dim, n_heads=8)
+
+        # 添加3步预测解码器组件
+        # 解码器Transformer块
+        self.decoder_step1 = TransformerBlock(input_size=self.hidden_size + self.pos_dim, n_heads=8)
+        self.decoder_step2 = TransformerBlock(input_size=self.hidden_size + self.pos_dim, n_heads=8)
+        self.decoder_step3 = TransformerBlock(input_size=self.hidden_size + self.pos_dim, n_heads=8)
+        
+        # 步长预测的线性层
+        self.step_linear1 = nn.Linear(self.hidden_size + self.pos_dim, self.hidden_size + self.pos_dim)
+        self.step_linear2 = nn.Linear(self.hidden_size + self.pos_dim, self.hidden_size + self.pos_dim)
+        self.step_linear3 = nn.Linear(self.hidden_size + self.pos_dim, self.hidden_size + self.pos_dim)
 
         # 输出层 - 将隐藏状态映射到用户预测概率，输出维度为user_size
         self.linear2 = nn.Linear(self.hidden_size + self.pos_dim, self.n_node)
@@ -242,11 +254,14 @@ class MSHGAT(nn.Module):
             output: 用户预测概率，形状为[batch_size*seq_len, user_size]
         """
 
-        input = input[:, :-1]  # 移除最后一个元素（通常是EOS标记），形状变为[batch_size, seq_len-1]
+        # 对于3步预测，我们需要截取输入序列，去掉最后Constants.STEP_SHIFT+1个元素
+        # 因为我们要预测每个位置后3步的用户，所以输入序列需要比原来短3+1步
+        # 例如，如果原序列是[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]，输入序列应该是[1, 2, 3, 4, 5, 6, 7]
+        input = input[:, :-Constants.STEP_SHIFT]  # 移除最后STEP_SHIFT+1个元素
         print(f"input输入结果{input.shape}")
         # print(input)
         # print(input_timestamp)
-        input_timestamp = input_timestamp[:, :-1]  # 相应地也移除时间戳的最后一个元素
+        input_timestamp = input_timestamp[:, :-Constants.STEP_SHIFT]  # 相应地也移除时间戳的最后STEP_SHIFT+1个元素
         hidden = self.dropout(self.gnn(graph))  # 使用GNN处理关系图，得到节点嵌入，形状为[n_node, hidden_size]
         memory_emb_list = self.hgnn(hidden, hypergraph_list)  # 使用HGNN处理超图，得到不同时间步的嵌入
         # print(sorted(memory_emb_list.keys()))
@@ -319,8 +334,29 @@ class MSHGAT(nn.Module):
         # 融合两种注意力输出，形状为[batch_size, seq_len-1, hidden_size+pos_dim]
         att_out = self.fus(diff_att_out, fri_att_out)
 
-        # 将融合后的注意力输出映射到用户预测空间
-        output_u = self.linear2(att_out.cuda())  # 形状为[batch_size, seq_len-1, user_size]
+        # ===== 添加3步预测解码器 =====
+        # 创建用于存储3步预测结果的张量
+        step1_features = torch.zeros_like(att_out)
+        step2_features = torch.zeros_like(att_out)
+        step3_features = torch.zeros_like(att_out)
+        
+        # 第1步预测：使用当前特征预测下一步
+        step1_hidden = self.step_linear1(att_out)
+        step1_features = self.decoder_step1(step1_hidden, step1_hidden, step1_hidden, mask=mask.cuda())
+        step1_features = self.dropout(step1_features)
+        
+        # 第2步预测：使用第1步预测结果预测下一步
+        step2_hidden = self.step_linear2(step1_features)
+        step2_features = self.decoder_step2(step2_hidden, step2_hidden, step2_hidden, mask=mask.cuda())
+        step2_features = self.dropout(step2_features)
+        
+        # 第3步预测：使用第2步预测结果预测下一步
+        step3_hidden = self.step_linear3(step2_features)
+        step3_features = self.decoder_step3(step3_hidden, step3_hidden, step3_hidden, mask=mask.cuda())
+        step3_features = self.dropout(step3_features)
+        
+        # 将最终的第3步特征映射到用户预测空间
+        output_u = self.linear2(step3_features)  # 形状为[batch_size, seq_len-1, user_size]
         
         # 获取之前用户的掩码 - 防止预测已出现的用户
         mask = get_previous_user_mask(input.cpu(), self.n_node)
