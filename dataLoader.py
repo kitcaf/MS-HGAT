@@ -30,7 +30,7 @@ class Options(object):
         self.net_data = 'data/'+data_name+'/edges.txt'  # 网络边数据文件路径
         self.embed_dim = 64  # 嵌入维度
 
-def Split_data(data_name, train_rate =0.8, valid_rate = 0.1, random_seed = 300, load_dict=True, with_EOS=True):
+def Split_data(data_name, train_rate =0.8, valid_rate = 0.1, random_seed = 300, load_dict=True, with_EOS=True, prediction_steps=Constants.prediction_steps):
         """
         数据分割函数：将数据集分为训练集、验证集和测试集
         参数:
@@ -40,6 +40,7 @@ def Split_data(data_name, train_rate =0.8, valid_rate = 0.1, random_seed = 300, 
             random_seed: 随机种子，默认300
             load_dict: 是否加载已有的用户映射字典，默认True
             with_EOS: 是否在序列末尾添加结束符，默认True
+            prediction_steps: 预测步数，默认为Constants.prediction_steps
         返回:
             user_size: 用户数量
             t_cascades: 所有级联序列
@@ -91,8 +92,9 @@ def Split_data(data_name, train_rate =0.8, valid_rate = 0.1, random_seed = 300, 
                     userlist.append(u2idx[user])
                     timestamplist.append(float(timestamp)) #转换为浮点数
 
-            # 只保留长度大于1且不超过500的级联
-            if len(userlist) > 1 and len(userlist)<=500:
+            # 修改：只保留长度大于prediction_steps+1且不超过500的级联
+            # 确保每个级联序列足够长以支持多步预测
+            if len(userlist) > prediction_steps+1 and len(userlist)<=500:
                 if with_EOS:
                     # 添加结束符
                     userlist.append(Constants.EOS)
@@ -218,7 +220,7 @@ class DataLoader(object):
     ''' 数据迭代器：用于批量加载数据 '''
 
     def __init__(
-        self, cas, batch_size=64, load_dict=True, cuda=True,  test=False, with_EOS=True): 
+        self, cas, batch_size=64, load_dict=True, cuda=True, test=False, with_EOS=True, prediction_steps=Constants.prediction_steps): 
         """
         初始化数据加载器
         参数:
@@ -228,6 +230,7 @@ class DataLoader(object):
             cuda: 是否使用CUDA，默认True
             test: 是否为测试模式，默认False
             with_EOS: 是否包含结束符，默认True
+            prediction_steps: 预测步数，默认为Constants.prediction_steps
         """
         self._batch_size = batch_size
         self.cas = cas[0]  # 级联序列
@@ -236,6 +239,7 @@ class DataLoader(object):
         self.test = test  # 测试模式标志
         self.with_EOS = with_EOS  # 是否包含结束符        
         self.cuda = cuda  # 是否使用CUDA
+        self.prediction_steps = prediction_steps  # 预测步数
 
         rows = len(self.cas)
         cols = len(self.cas[0]) if rows > 0 else 0
@@ -244,8 +248,6 @@ class DataLoader(object):
 
         self._n_batch = int(np.ceil(len(self.cas) / self._batch_size))  # 批次数量
         self._iter_count = 0  # 迭代计数器
-
-     
 
     def __iter__(self):
         """迭代器方法"""
@@ -261,7 +263,7 @@ class DataLoader(object):
 
     # 核心迭代器方法，返回下一个批次的数据
     def next(self):
-        ''' 获取下一批数据 '''
+        ''' 获取下一批数据，支持多步预测 '''
 
         # 将序列填充到最大长度
         def pad_to_longest(insts):

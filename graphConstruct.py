@@ -23,7 +23,6 @@ def ConRelationGraph(data):
         with open(options.u2idx_dict, 'rb') as handle:
             _u2idx = pickle.load(handle)
         
-        #TODO 
         edges_list = []  # 边列表
         if os.path.exists(options.net_data):
             with open(options.net_data, 'r') as handle:
@@ -79,7 +78,24 @@ def ConHyperGraphList(cascades, timestamps, user_size, step_split=Constants.step
     # 计算每个分割的长度
     split_length = len(time_sorted) // step_split
     
-    # 根据时间戳分割超图
+    # 根据时间戳分割超图，其实核心就是
+
+    """
+       形如
+              级联0  级联1  级联2 ...
+        用户0 |  0.0   0.0   0.0 |
+        用户1 |  0.0   0.0  12.0 |
+        用户2 |  0.0  15.0   0.0 |
+        用户3 |  0.0   0.0   5.0 |
+        用户4 |  0.0   0.0   0.0 |
+        用户5 |  0.0  10.0   0.0 |
+        用户6 |  0.0   0.0   0.0 |
+        用户7 |  0.0   0.0   0.0 |
+        用户8 |  0.0   0.0   8.0 |
+        用户9 |  0.0   0.0   0.0 |
+     从中选择值在某个范围的图，其实就形成了不同时间步的超图
+  
+    """
     for x in range(split_length, split_length * step_split , split_length):
         if x == split_length:
             # 第一个子图：从开始到第一个分割点
@@ -95,13 +111,14 @@ def ConHyperGraphList(cascades, timestamps, user_size, step_split=Constants.step
     return graphs
     
     
-def ConHyperDiffsuionGraph(cascades, timestamps, user_size):
+def ConHyperDiffsuionGraph(cascades, timestamps, user_size, prediction_steps=Constants.prediction_steps):
     '''
     返回超图的邻接矩阵和时间邻接矩阵
     参数:
         cascades: 级联序列 二维
         timestamps: 时间戳 二维
         user_size: 用户数量
+        prediction_steps: 预测步数，默认为Constants.prediction_steps
     返回:
         Times: 时间邻接矩阵
         root_list: 根节点列表
@@ -116,12 +133,10 @@ def ConHyperDiffsuionGraph(cascades, timestamps, user_size):
         
     for i in range(e_size-1):
         root_list.append(cascades[i][0])  # 添加每个级联的根节点
-        #TODO 后面改成3步预测时，这里就是-3
-        rows += cascades[i][:-1]          # 添加行索引（用户）
-        cols +=[i+1]*(len(cascades[i])-1) # 添加列索引（级联ID）
-        #vals +=[1.0]*(len(cascades[i])-1)
-        #TODO 后面改成3步预测时，同理也是-3
-        vals_time += timestamps[i][:-1]    # 添加时间值
+        # TODO 修改：保留更多的序列元素用于预测，排除最后prediction_steps个元素
+        rows += cascades[i][:-prediction_steps]          # 添加行索引（用户）
+        cols +=[i+1]*(len(cascades[i])-prediction_steps) # 添加列索引（级联ID）
+        vals_time += timestamps[i][:-prediction_steps]    # 添加时间值
     """
         假设：数据流动
         cascades = [
