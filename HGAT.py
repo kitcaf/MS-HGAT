@@ -21,17 +21,18 @@ from torch.autograd import Variable
 
 def get_previous_user_mask(seq, user_size):
     ''' 
-    为之前激活的用户创建掩码
+    为之前激活的用户创建掩码 - 用于防止模型预测已经出现过的用户
+    这是针对信息传播场景的一个重要约束 - 一个用户一旦被激活，就不应该再次被激活。
     参数:
-        seq: 用户序列
-        user_size: 用户总数
+        seq: 用户序列，形状为[batch_size, seq_len]
+        user_size: 用户总数（包含PAD和EOS标记，即user_size = 实际用户数 + 2）
     返回:
-        masked_seq: 掩码张量
+        masked_seq: 掩码张量，形状为[batch_size, seq_len, user_size]，对已出现用户位置赋予大的负值
     '''
     assert seq.dim() == 2
     prev_shape = (seq.size(0), seq.size(1), seq.size(1))
     seqs = seq.repeat(1, 1, seq.size(1)).view(seq.size(0), seq.size(1), seq.size(1))
-    previous_mask = np.tril(np.ones(prev_shape)).astype('float32')  # 下三角矩阵
+    previous_mask = np.tril(np.ones(prev_shape)).astype('float32')  # 下三角矩阵，确保只看之前位置的用户
     previous_mask = torch.from_numpy(previous_mask)
     if seq.is_cuda:
         previous_mask = previous_mask.cuda()
@@ -198,7 +199,7 @@ class MSHGAT(nn.Module):
         """
         super(MSHGAT, self).__init__()
         self.hidden_size = opt.d_word_vec
-        self.n_node = opt.user_size
+        self.n_node = opt.user_size  # 节点数量，等于user_size（用户数+2），包含PAD和EOS标记
         self.pos_dim = 8  # 位置嵌入维度
         self.dropout = nn.Dropout(dropout)
         self.initial_feature = opt.initialFeatureSize
@@ -216,7 +217,7 @@ class MSHGAT(nn.Module):
         self.decoder_attention1 = TransformerBlock(input_size=self.hidden_size + self.pos_dim, n_heads=8)
         self.decoder_attention2 = TransformerBlock(input_size=self.hidden_size + self.pos_dim, n_heads=8)
 
-        # 输出层
+        # 输出层 - 将隐藏状态映射到用户预测概率，输出维度为user_size
         self.linear2 = nn.Linear(self.hidden_size + self.pos_dim, self.n_node)
         # 嵌入层
         self.embedding = nn.Embedding(self.n_node, self.initial_feature, padding_idx=0)
@@ -232,31 +233,32 @@ class MSHGAT(nn.Module):
         """
         前向传播
         参数:
-            input: 输入序列
-            input_timestamp: 输入时间戳
-            input_idx: 输入索引
+            input: 输入序列，形状为[batch_size, seq_len]
+            input_timestamp: 输入时间戳，形状为[batch_size, seq_len]
+            input_idx: 输入索引，级联的索引
             graph: 关系图
             hypergraph_list: 超图列表
         返回:
-            output_u: 用户预测概率
+            output: 用户预测概率，形状为[batch_size*seq_len, user_size]
         """
 
-        input = input[:, :-1]  # 移除最后一个元素（通常是EOS标记）
+        input = input[:, :-1]  # 移除最后一个元素（通常是EOS标记），形状变为[batch_size, seq_len-1]
+        print(f"input输入结果{input.shape}")
         # print(input)
         # print(input_timestamp)
-        input_timestamp = input_timestamp[:, :-1]
-        hidden = self.dropout(self.gnn(graph))  # 使用GNN处理关系图
-        memory_emb_list = self.hgnn(hidden, hypergraph_list)  # 使用HGNN处理超图
+        input_timestamp = input_timestamp[:, :-1]  # 相应地也移除时间戳的最后一个元素
+        hidden = self.dropout(self.gnn(graph))  # 使用GNN处理关系图，得到节点嵌入，形状为[n_node, hidden_size]
+        memory_emb_list = self.hgnn(hidden, hypergraph_list)  # 使用HGNN处理超图，得到不同时间步的嵌入
         # print(sorted(memory_emb_list.keys()))
 
-        mask = (input == Constants.PAD)  # 创建填充掩码
-        batch_t = torch.arange(input.size(1)).expand(input.size()).cuda()  # 位置索引
-        order_embed = self.dropout(self.pos_embedding(batch_t))  # 位置嵌入
-        batch_size, max_len = input.size()
+        mask = (input == Constants.PAD)  # 创建填充掩码，标记哪些位置是PAD
+        batch_t = torch.arange(input.size(1)).expand(input.size()).cuda()  # 位置索引，形状为[batch_size, seq_len-1]
+        order_embed = self.dropout(self.pos_embedding(batch_t))  # 位置嵌入，形状为[batch_size, seq_len-1, pos_dim]
+        batch_size, max_len = input.size()  # 获取批次大小和序列长度
 
-        zero_vec = torch.zeros_like(input)  # 零向量
-        dyemb = torch.zeros(batch_size, max_len, self.hidden_size).cuda()  # 动态嵌入
-        cas_emb = torch.zeros(batch_size, max_len, self.hidden_size).cuda()  # 级联嵌入
+        zero_vec = torch.zeros_like(input)  # 零向量，用于时间戳处理
+        dyemb = torch.zeros(batch_size, max_len, self.hidden_size).cuda()  # 动态嵌入，形状为[batch_size, seq_len-1, hidden_size]
+        cas_emb = torch.zeros(batch_size, max_len, self.hidden_size).cuda()  # 级联嵌入，形状为[batch_size, seq_len-1, hidden_size]
 
         # 根据时间戳处理嵌入
         for ind, time in enumerate(sorted(memory_emb_list.keys())):
@@ -300,9 +302,9 @@ class MSHGAT(nn.Module):
                 cas_emb += sub_cas
         # dyemb = self.fus2(dyemb,cas_emb)
 
-        # 拼接动态嵌入和位置嵌入
+        # 拼接动态嵌入和位置嵌入，形状为[batch_size, seq_len-1, hidden_size+pos_dim]
         diff_embed = torch.cat([dyemb, order_embed], dim=-1).cuda()
-        # 拼接关系图嵌入和位置嵌入
+        # 拼接关系图嵌入和位置嵌入，形状为[batch_size, seq_len-1, hidden_size+pos_dim]
         fri_embed = torch.cat([F.embedding(input.cuda(), hidden.cuda()), order_embed], dim=-1).cuda()
 
         # 使用Transformer块处理扩散嵌入
@@ -314,13 +316,19 @@ class MSHGAT(nn.Module):
         fri_att_out = self.decoder_attention2(fri_embed.cuda(), fri_embed.cuda(), fri_embed.cuda(), mask=mask.cuda())
         fri_att_out = self.dropout(fri_att_out.cuda())
 
-        # 融合两种注意力输出
+        # 融合两种注意力输出，形状为[batch_size, seq_len-1, hidden_size+pos_dim]
         att_out = self.fus(diff_att_out, fri_att_out)
 
-        # 结合用户和级联
-        output_u = self.linear2(att_out.cuda())  # (bsz, user_len, |U|)
-        # 获取之前用户的掩码
+        # 将融合后的注意力输出映射到用户预测空间
+        output_u = self.linear2(att_out.cuda())  # 形状为[batch_size, seq_len-1, user_size]
+        
+        # 获取之前用户的掩码 - 防止预测已出现的用户
         mask = get_previous_user_mask(input.cpu(), self.n_node)
-
-        return (output_u + mask).view(-1, output_u.size(-1)).cuda()  # 添加掩码并重塑输出
+        
+        # 添加掩码并重塑输出，将3D张量展平为2D张量
+        # 加mask是为了使已出现用户的预测概率变低（加上一个大的负值）
+        # view(-1, output_u.size(-1))将[batch_size, seq_len-1, user_size]展平为[batch_size*(seq_len-1), user_size]
+        output = (output_u + mask).view(-1, output_u.size(-1)).cuda()
+        print(f"output输出结果{output.shape}")
+        return  output # 返回预测结果，维度为[batch_size*(seq_len-1), user_size]
 

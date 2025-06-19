@@ -49,13 +49,15 @@ class Metrics(object):
         计算多个评估指标
         
         参数:
-            y_true: (#样本, ) - 真实标签
-            y_pred: (#样本, #用户) - 预测概率
+            y_true: (#样本, ) - 真实标签，一维数组，形状为[batch_size*seq_len]
+                    每个元素代表一个位置的真实用户ID
+            y_prob: (#样本, #用户) - 预测概率，二维数组，形状为[batch_size*seq_len, user_size]
+                    每行代表对应位置预测的所有可能用户的概率分布
             k_list: 要计算指标的k值列表
             
         返回:
             scores: 包含各种指标的字典
-            scores_len: 有效样本数量
+            scores_len: 有效样本数量（非PAD位置的数量）
         '''
         scores_len = 0
         y_prob = np.array(y_prob)
@@ -66,16 +68,21 @@ class Metrics(object):
         scores.update({'map@'+str(k):[] for k in k_list})
         
         # 对每个样本计算指标
+        # 这里的循环遍历每个位置（每个预测和真实标签对）
+        # zip(y_prob, y_true)将每一行的预测概率和对应的真实标签配对
         for p_, y_ in zip(y_prob, y_true):
+            # 只处理非PAD位置（即有效的预测位置）
             if y_ != self.PAD:
                 scores_len += 1.0
-                p_sort = p_.argsort()  # 按预测概率排序
+                p_sort = p_.argsort()  # 按预测概率排序，得到索引排序结果
                 for k in k_list:
-                    topk = p_sort[-k:][::-1]  # 获取前k个预测
-                    scores['hits@' + str(k)].extend([1. if y_ in topk else 0.])  # 命中率@k
-                    scores['map@'+str(k)].extend([self.apk([y_], topk, k)])  # 平均精度@k
+                    topk = p_sort[-k:][::-1]  # 获取前k个预测（最高概率的k个用户ID）
+                    # 命中率@k: 如果真实用户在前k个预测中，则记为1，否则为0
+                    scores['hits@' + str(k)].extend([1. if y_ in topk else 0.])
+                    # 平均精度@k: 计算排序质量
+                    scores['map@'+str(k)].extend([self.apk([y_], topk, k)])
 
-        # 计算平均值
+        # 计算平均值 - 对所有非PAD位置的得分取平均
         scores = {k: np.mean(v) for k, v in scores.items()}
         return scores, scores_len
 

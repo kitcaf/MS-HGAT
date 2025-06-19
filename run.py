@@ -58,17 +58,17 @@ def get_performance(crit, pred, gold):
     计算模型性能
     参数:
         crit: 损失函数
-        pred: 预测值
-        gold: 真实值
+        pred: 预测值，维度为 [batch_size*seq_len, user_size]
+        gold: 真实值，维度为 [batch_size, seq_len]
     返回:
         loss: 损失值
         n_correct: 预测正确的样本数
     """
 
-    loss = crit(pred, gold.contiguous().view(-1))  # 计算损失
-    pred = pred.max(1)[1]  # 获取预测的最大概率的索引
-    gold = gold.contiguous().view(-1)  # 展平真实值
-    n_correct = pred.data.eq(gold.data)  # 比较预测值和真实值
+    loss = crit(pred, gold.contiguous().view(-1))  # 计算损失，将gold展平为一维向量 [batch_size*seq_len]
+    pred = pred.max(1)[1]  # 获取预测的最大概率的索引，维度为 [batch_size*seq_len]
+    gold = gold.contiguous().view(-1)  # 展平真实值，维度为 [batch_size*seq_len]
+    n_correct = pred.data.eq(gold.data)  # 比较预测值和真实值，得到布尔张量
     n_correct = n_correct.masked_select(gold.ne(Constants.PAD).data).sum().float()  # 计算非填充位置的正确预测数
     return loss, n_correct
 
@@ -96,11 +96,12 @@ def train_epoch(model, training_data, graph, hypergraph_list, loss_func, optimiz
     batch_num = 0.0
 
     for i, batch in enumerate(training_data): # tqdm(training_data, mininterval=2, desc='  - (Training)   ', leave=False):
+        print(f"开始训练{i}")
         # 准备数据
         tgt, tgt_timestamp, tgt_idx = (item.cuda() for item in batch)
         
         np.set_printoptions(threshold=np.inf)
-        gold = tgt[:, 1:]  # 真实值为目标序列的下一个元素
+        gold = tgt[:, 1:]  # 真实值为目标序列的下一个元素，维度为 [batch_size, seq_len-1]
 
         n_words = gold.data.ne(Constants.PAD).sum().float()  # 非填充词的数量
         n_total_words += n_words
@@ -108,7 +109,7 @@ def train_epoch(model, training_data, graph, hypergraph_list, loss_func, optimiz
         
         # 训练
         optimizer.zero_grad()  # 清空梯度
-        pred = model(tgt, tgt_timestamp,tgt_idx, graph, hypergraph_list)  # 前向传播
+        pred = model(tgt, tgt_timestamp,tgt_idx, graph, hypergraph_list)  # 前向传播，得到预测值 [batch_size*seq_len, user_size]
         
         # 计算损失
         loss, n_correct = get_performance(loss_func, pred, gold)
@@ -131,8 +132,10 @@ def train_model(MSHGAT, data_path):
         data_path: 数据路径
     """
     # ========= 准备数据加载器 =========#
+    # user_size是用户总数+2，其中+2是因为添加了两个特殊标记：PAD(0)和EOS(1)
+    # PAD用于序列填充，EOS用于标记序列结束
     user_size, total_cascades, timestamps, train, valid, test = Split_data(data_path, opt.train_rate, opt.valid_rate, load_dict=True)
-    
+    print(f"totle user_size {user_size}") #12627 （后面是12629 ）
     train_data = DataLoader(train, batch_size=opt.batch_size, load_dict=True, cuda=False)
     valid_data = DataLoader(valid, batch_size=opt.batch_size, load_dict=True, cuda=False)
     test_data = DataLoader(test, batch_size=opt.batch_size, load_dict=True, cuda=False)
@@ -141,7 +144,7 @@ def train_model(MSHGAT, data_path):
     relation_graph = ConRelationGraph(data_path)
     hypergraph_list = ConHyperGraphList(total_cascades, timestamps, user_size)
 
-    opt.user_size = user_size
+    opt.user_size = user_size  # 将user_size设置为模型参数
 
     # ========= 准备模型 =========#
     model = MSHGAT(opt, dropout = opt.dropout)
@@ -217,18 +220,27 @@ def test_epoch(model, validation_data, graph, hypergraph_list, k_list=[10, 50, 1
         scores['map@' + str(k)] = 0
 
     n_total_words = 0
+    print("--------------------------测试集测试")
     with torch.no_grad():  # 不计算梯度
         for i, batch in enumerate(validation_data):  #tqdm(validation_data, mininterval=2, desc='  - (Validation) ', leave=False):
             #print("Validation batch ", i)
             # 准备数据
             tgt, tgt_timestamp, tgt_idx =  batch
-            y_gold = tgt[:, 1:].contiguous().view(-1).detach().cpu().numpy()  # 真实值
-
+            # 将真实标签展平为一维向量，维度为 [batch_size*seq_len]
+            y_gold = tgt[:, 1:].contiguous().view(-1).detach().cpu().numpy()  # 真实值，这里是将其展开为一个序列
+            print(f"真实标签，{y_gold.shape}")
             # 前向传播
             pred = model(tgt, tgt_timestamp, tgt_idx, graph, hypergraph_list )
-            y_pred = pred.detach().cpu().numpy()  # 预测值
-
+            # 预测结果，维度为 [batch_size*seq_len, user_size]
+            y_pred = pred.detach().cpu().numpy()  # 预测值 
+            print(f"预测标签，{y_pred.shape}")
+            
             # 计算指标
+            # 这里metric.compute_metric会对每个预测-真实标签对计算指标
+            # 注意：虽然y_pred和y_gold的维度关系是 [batch_size*seq_len, user_size] 和 [batch_size*seq_len]
+            # 但在compute_metric函数中，会遍历每个样本点，只比较对应位置的预测和真实值
+            
+            # 函数内部会忽略PAD位置的预测，只评估有效位置
             scores_batch, scores_len = metric.compute_metric(y_pred, y_gold, k_list)
             n_total_words += scores_len
             for k in k_list:
