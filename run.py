@@ -166,6 +166,12 @@ def train_model(MSHGAT, data_path):
 
     validation_history = 0.0
     best_scores = {}
+    
+    # 创建或打开结果文件
+    with open('result_metric.txt', 'w') as f:
+        f.write("Training Metrics Log\n")
+        f.write("====================\n\n")
+    
     # 开始训练循环
     for epoch_i in range(opt.epoch):
         print('\n[ Epoch', epoch_i, ']')
@@ -182,14 +188,25 @@ def train_model(MSHGAT, data_path):
             start = time.time()
             scores = test_epoch(model, valid_data, relation_graph, hypergraph_list)
             print('  - ( Validation )) ')
-            for metric in scores.keys():
-                print(metric + ' ' + str(scores[metric]))
+            
+            # 将验证结果写入文件
+            with open('result_metric.txt', 'a') as f:
+                f.write(f"\n[ Epoch {epoch_i} ] - (Validation)\n")
+                for metric in scores.keys():
+                    print(metric + ' ' + str(scores[metric]))
+                    f.write(f"{metric}: {scores[metric]}\n")
+            
             print("Validation use time: ", (time.time() - start) / 60, "min")
 
             print('  - (Test) ')
             scores = test_epoch(model, test_data, relation_graph, hypergraph_list)
-            for metric in scores.keys():
-                print(metric + ' ' + str(scores[metric]))
+            
+            # 将测试结果写入文件
+            with open('result_metric.txt', 'a') as f:
+                f.write(f"\n[ Epoch {epoch_i} ] - (Test)\n")
+                for metric in scores.keys():
+                    print(metric + ' ' + str(scores[metric]))
+                    f.write(f"{metric}: {scores[metric]}\n")
 
             # 保存最佳模型
             if validation_history <= sum(scores.values()):
@@ -286,8 +303,13 @@ def test_model(MSHGAT, data_path):
     # 评估模型
     scores = test_epoch(model, test_data, relation_graph, hypergraph_list)
     print('  - (Test) ')
-    for metric in scores.keys():
-        print(metric + ' ' + str(scores[metric]))
+    
+    # 将测试结果写入文件
+    with open('result_metric.txt', 'a') as f:
+        f.write("\n=== TEST RESULTS ===\n")
+        for metric in scores.keys():
+            print(metric + ' ' + str(scores[metric]))
+            f.write(f"{metric}: {scores[metric]}\n")
 
 
 if __name__ == "__main__": 
